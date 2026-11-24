@@ -19,6 +19,20 @@ const FALLBACK_MODELS = (process.env.FALLBACK_MODELS || 'gemini-3.5-flash,gemini
   .map((item) => item.trim())
   .filter(Boolean);
 const RETRYABLE = /(50[0234]|429)/;
+// Gemini 3 requires the thought signature of every functionCall to be sent back
+// unchanged. OpenAI's schema has nowhere to put it, so it travels inside the
+// tool_call id: "fc_<random>_<signature>".
+const SIG_RE = /^fc_[a-z0-9]+_(.+)$/;
+
+function toolCallId(signature) {
+  if (!signature) return `call_${Math.random().toString(36).slice(2, 10)}`;
+  return `fc_${Math.random().toString(36).slice(2, 8)}_${signature}`;
+}
+
+function signatureOf(id) {
+  const match = SIG_RE.exec(String(id || ''));
+  return match ? match[1] : null;
+}
 
 const ALLOWED_SCHEMA_KEYS = new Set([
   'type', 'format', 'description', 'nullable', 'enum', 'items', 'properties',
@@ -98,7 +112,10 @@ function toGeminiRequest(body) {
       for (const call of message.tool_calls || []) {
         const name = call?.function?.name || 'tool';
         if (call?.id) pendingToolNames.set(call.id, name);
-        parts.push({ functionCall: { name, args: safeJson(call?.function?.arguments) } });
+        const part = { functionCall: { name, args: safeJson(call?.function?.arguments) } };
+        const signature = signatureOf(call?.id);
+        if (signature) part.thoughtSignature = signature;
+        parts.push(part);
       }
       if (parts.length) contents.push({ role: 'model', parts });
       continue;
@@ -142,7 +159,7 @@ function fromGeminiResponse(data, modelId) {
   for (const part of parts) {
     if (!part.functionCall) continue;
     toolCalls.push({
-      id: `call_${Math.random().toString(36).slice(2, 10)}`,
+      id: toolCallId(part.thoughtSignature),
       type: 'function',
       function: {
         name: part.functionCall.name,
@@ -235,7 +252,7 @@ async function streamToOpenAI(geminiResponse, res, modelId) {
         if (part.text) send({ content: part.text });
         if (part.functionCall) {
           toolCalls.push({
-            id: `call_${Math.random().toString(36).slice(2, 10)}`,
+            id: toolCallId(part.thoughtSignature),
             type: 'function',
             function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args || {}) },
           });
