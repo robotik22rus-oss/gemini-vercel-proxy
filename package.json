@@ -1,0 +1,10 @@
+{
+  "name": "gemini-vercel-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenAI-compatible Gemini proxy for Vercel (chat, streaming, tool calling)",
+  "engines": {
+    "node": ">=20"
+  }
+}
