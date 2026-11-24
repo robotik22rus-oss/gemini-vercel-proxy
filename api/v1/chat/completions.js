@@ -14,6 +14,11 @@ const GEMINI_BASE = process.env.GEMINI_BASE_URL || 'https://generativelanguage.g
 const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'gemini-3.1-flash-lite';
 const PROXY_TOKEN = process.env.PROXY_TOKEN || '';
 const ALIASES = new Set(['gemini-in-russia', 'gemini-ru', 'gemini']);
+const FALLBACK_MODELS = (process.env.FALLBACK_MODELS || 'gemini-3.5-flash,gemini-3.6-flash,gemini-3.1-flash-lite')
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
+const RETRYABLE = /(50[0234]|429)/;
 
 const ALLOWED_SCHEMA_KEYS = new Set([
   'type', 'format', 'description', 'nullable', 'enum', 'items', 'properties',
@@ -117,6 +122,10 @@ function toGeminiRequest(body) {
   if (declarations.length) request.tools = [{ functionDeclarations: declarations }];
 
   const config = {};
+  const effort = String(body.reasoning_effort ?? '').toLowerCase();
+  if (effort === 'none' || effort === 'off' || body.reasoning_effort === 0) {
+    config.thinkingConfig = { thinkingBudget: 0 };
+  }
   if (Number.isFinite(body.max_tokens)) config.maxOutputTokens = body.max_tokens;
   if (Number.isFinite(body.temperature)) config.temperature = body.temperature;
   if (Number.isFinite(body.top_p)) config.topP = body.top_p;
@@ -244,6 +253,20 @@ async function streamToOpenAI(geminiResponse, res, modelId) {
   res.end();
 }
 
+async function callWithFallback(model, request, stream) {
+  const candidates = [model, ...FALLBACK_MODELS.filter((id) => id !== model)];
+  let lastError;
+  for (const candidate of candidates) {
+    try {
+      return { model: candidate, response: await callGemini(candidate, request, stream) };
+    } catch (error) {
+      lastError = error;
+      if (!RETRYABLE.test(String(error?.message || ''))) throw error;
+    }
+  }
+  throw lastError;
+}
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -289,13 +312,15 @@ export default async function handler(req, res) {
       return;
     }
 
-    const upstream = await callGemini(model, request, Boolean(body.stream));
+    const upstreamResult = await callWithFallback(model, request, Boolean(body.stream));
+    const usedModel = upstreamResult.model;
+    const upstream = upstreamResult.response;
     if (body.stream) {
-      await streamToOpenAI(upstream, res, body.model || model);
+      await streamToOpenAI(upstream, res, body.model || usedModel);
       return;
     }
     const data = await upstream.json();
-    res.status(200).json(fromGeminiResponse(data, body.model || model));
+    res.status(200).json(fromGeminiResponse(data, body.model || usedModel));
   } catch (error) {
     badRequest(res, String(error?.message || error), 502);
   }
