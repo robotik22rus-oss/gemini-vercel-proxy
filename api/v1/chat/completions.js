@@ -11,10 +11,10 @@
 //   GEMINI_BASE_URL  optional, default https://generativelanguage.googleapis.com/v1beta
 
 const GEMINI_BASE = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
-const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'gemini-3.1-flash-lite';
+const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'gemini-3.6-flash';
 const PROXY_TOKEN = process.env.PROXY_TOKEN || '';
 const ALIASES = new Set(['gemini-in-russia', 'gemini-ru', 'gemini']);
-const FALLBACK_MODELS = (process.env.FALLBACK_MODELS || 'gemini-3.5-flash,gemini-3.6-flash,gemini-3.1-flash-lite')
+const FALLBACK_MODELS = (process.env.FALLBACK_MODELS || 'gemini-3.5-flash,gemini-3.1-flash-lite')
   .split(',')
   .map((item) => item.trim())
   .filter(Boolean);
@@ -332,12 +332,16 @@ export default async function handler(req, res) {
     const upstreamResult = await callWithFallback(model, request, Boolean(body.stream));
     const usedModel = upstreamResult.model;
     const upstream = upstreamResult.response;
+    res.setHeader('x-gemini-model', usedModel);
+    res.setHeader('access-control-expose-headers', 'x-gemini-model');
     if (body.stream) {
-      await streamToOpenAI(upstream, res, body.model || usedModel);
+      await streamToOpenAI(upstream, res, usedModel);
       return;
     }
     const data = await upstream.json();
-    res.status(200).json(fromGeminiResponse(data, body.model || usedModel));
+    const payload = fromGeminiResponse(data, usedModel);
+    payload.model_used = usedModel;
+    res.status(200).json(payload);
   } catch (error) {
     badRequest(res, String(error?.message || error), 502);
   }
