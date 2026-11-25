@@ -26,7 +26,7 @@ const FALLBACK_MODELS = (process.env.FALLBACK_MODELS || 'gemini-3.5-flash,gemini
   .split(',')
   .map((item) => cleanModelId(item, ''))
   .filter(Boolean);
-const RETRYABLE = /(50[0234]|429)/;
+const RETRYABLE = /(50[0234]|429|location is not supported)/i;
 // Gemini 3 requires the thought signature of every functionCall to be sent back
 // unchanged. OpenAI's schema has nowhere to put it, so it travels inside the
 // tool_call id: "fc_<random>_<signature>".
