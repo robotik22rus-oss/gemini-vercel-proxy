@@ -11,12 +11,20 @@
 //   GEMINI_BASE_URL  optional, default https://generativelanguage.googleapis.com/v1beta
 
 const GEMINI_BASE = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
-const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'gemini-3.6-flash';
+function cleanModelId(value, fallback) {
+  const cleaned = String(value || '')
+    .trim()
+    .replace(/^["']+|["']+$/g, '')
+    .replace(/[^a-zA-Z0-9._-]/g, '');
+  return cleaned || fallback;
+}
+
+const DEFAULT_MODEL = cleanModelId(process.env.DEFAULT_MODEL, 'gemini-3.6-flash');
 const PROXY_TOKEN = process.env.PROXY_TOKEN || '';
 const ALIASES = new Set(['gemini-in-russia', 'gemini-ru', 'gemini']);
 const FALLBACK_MODELS = (process.env.FALLBACK_MODELS || 'gemini-3.5-flash,gemini-3.1-flash-lite')
   .split(',')
-  .map((item) => item.trim())
+  .map((item) => cleanModelId(item, ''))
   .filter(Boolean);
 const RETRYABLE = /(50[0234]|429)/;
 // Gemini 3 requires the thought signature of every functionCall to be sent back
