@@ -57,6 +57,52 @@ function textOf(content) {
   return '';
 }
 
+function dataUrlPart(url) {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(String(url || ''));
+  if (!match) return null;
+  return { inlineData: { mimeType: match[1], data: match[2].replace(/\s+/g, '') } };
+}
+
+async function imagePart(url) {
+  const raw = String(url || '');
+  if (!raw) return null;
+  const inline = dataUrlPart(raw);
+  if (inline) return inline;
+  if (!/^https?:/i.test(raw)) return null;
+  try {
+    const response = await fetch(raw);
+    if (!response.ok) return null;
+    const mime = (response.headers.get('content-type') || 'image/png').split(';')[0];
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return { inlineData: { mimeType: mime, data: buffer.toString('base64') } };
+  } catch {
+    return null;
+  }
+}
+
+async function partsOf(content) {
+  if (typeof content === 'string') return content ? [{ text: content }] : [];
+  if (!Array.isArray(content)) return [];
+  const parts = [];
+  for (const item of content) {
+    if (typeof item === 'string') {
+      if (item) parts.push({ text: item });
+      continue;
+    }
+    if (!item || typeof item !== 'object') continue;
+    if (typeof item.text === 'string' && item.text) {
+      parts.push({ text: item.text });
+      continue;
+    }
+    const url = item.image_url?.url || (typeof item.image_url === 'string' ? item.image_url : '');
+    if (url) {
+      const part = await imagePart(url);
+      if (part) parts.push(part);
+    }
+  }
+  return parts;
+}
+
 function safeJson(value) {
   if (value && typeof value === 'object') return value;
   try {
@@ -92,7 +138,7 @@ function resolveModel(modelId) {
   return id;
 }
 
-function toGeminiRequest(body) {
+async function toGeminiRequest(body) {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const systemParts = [];
   const contents = [];
@@ -114,9 +160,7 @@ function toGeminiRequest(body) {
       continue;
     }
     if (role === 'assistant') {
-      const parts = [];
-      const text = textOf(message.content);
-      if (text) parts.push({ text });
+      const parts = await partsOf(message.content);
       for (const call of message.tool_calls || []) {
         const name = call?.function?.name || 'tool';
         if (call?.id) pendingToolNames.set(call.id, name);
@@ -128,8 +172,8 @@ function toGeminiRequest(body) {
       if (parts.length) contents.push({ role: 'model', parts });
       continue;
     }
-    const text = textOf(message.content);
-    if (text) contents.push({ role: 'user', parts: [{ text }] });
+    const parts = await partsOf(message.content);
+    if (parts.length) contents.push({ role: 'user', parts });
   }
 
   const request = { contents };
@@ -331,7 +375,7 @@ export default async function handler(req, res) {
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {};
     const model = resolveModel(body.model);
-    const request = toGeminiRequest(body);
+    const request = await toGeminiRequest(body);
     if (!request.contents.length) {
       badRequest(res, 'messages are empty');
       return;
