@@ -192,7 +192,11 @@ async function toGeminiRequest(body) {
 
   const config = {};
   const effort = String(body.reasoning_effort ?? '').toLowerCase();
-  if (effort === 'none' || effort === 'off' || body.reasoning_effort === 0) {
+  // Clients that do not send reasoning_effort (mobile apps) would inherit the
+  // model's default thinking, which can exceed Vercel's 60 s function limit.
+  // Treat "not specified" as thinking off; explicit low/medium/high keep the
+  // provider default.
+  if (effort === '' || effort === 'none' || effort === 'off' || body.reasoning_effort === 0) {
     config.thinkingConfig = { thinkingBudget: 0 };
   }
   if (Number.isFinite(body.max_tokens)) config.maxOutputTokens = body.max_tokens;
