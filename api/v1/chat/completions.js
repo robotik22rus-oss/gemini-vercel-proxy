@@ -26,7 +26,7 @@ const FALLBACK_MODELS = (process.env.FALLBACK_MODELS || 'gemini-3.5-flash,gemini
   .split(',')
   .map((item) => cleanModelId(item, ''))
   .filter(Boolean);
-const RETRYABLE = /(50[0234]|429|location is not supported)/i;
+const RETRYABLE = /(50[0234]|429|location is not supported|attempt timeout)/i;
 // Gemini 3 requires the thought signature of every functionCall to be sent back
 // unchanged. OpenAI's schema has nowhere to put it, so it travels inside the
 // tool_call id: "fc_<random>_<signature>".
@@ -250,16 +250,31 @@ function badRequest(res, message, status = 400) {
   res.status(status).json({ error: { message, type: 'proxy_error' } });
 }
 
+const ATTEMPT_TIMEOUT_MS = Number(process.env.ATTEMPT_TIMEOUT_MS || 18000);
+
 async function callGemini(path, request, stream) {
   const url = `${GEMINI_BASE}/models/${path}:${stream ? 'streamGenerateContent?alt=sse' : 'generateContent'}`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-goog-api-key': process.env.GEMINI_API_KEY || '',
-    },
-    body: JSON.stringify(request),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-goog-api-key': process.env.GEMINI_API_KEY || '',
+      },
+      body: JSON.stringify(request),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error && (error.name === 'AbortError' || error.code === 'ABORT_ERR')) {
+      throw new Error('attempt timeout');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`${response.status}: ${detail.slice(0, 500)}`);
